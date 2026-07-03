@@ -93,8 +93,8 @@ SERA is a state-of-the-art behavioral intelligence platform designed to ingest a
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | **AI_API_KEY** | Yes | — | xAI Grok-3 API key |
-| **DEMO_API_KEY** | No | `sera-demo-2026` | API authentication key for all endpoints |
-| **DATABASE_URL** | No | `sqlite+aiosqlite:///./sera_db.sqlite3` | Database connection string |
+| **DEMO_API_KEY** | No | `your_demo_api_key_here` | API authentication key for all endpoints |
+| **DATABASE_URL** | No | `postgresql+asyncpg://your_db_user:your_db_password@db:5432/sera_db` | Database connection string (e.g. Postgres or SQLite) |
 | **ENTITY_MODE** | No | `live` | `live` uses PyTorch CIFN, `mock` uses random responses |
 
 ## Tech Stack
