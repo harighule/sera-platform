@@ -1,0 +1,46 @@
+version: '3.9'
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sera_user
+      POSTGRES_PASSWORD: sera_pass
+      POSTGRES_DB: sera_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sera_user -d sera_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sera_user:sera_pass@db:5432/sera_db
+      ENTITY_MODE: live
+      AI_API_KEY: ${AI_API_KEY}
+      DEMO_API_KEY: ${DEMO_API_KEY:-sera-demo-2026}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: on-failure
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: on-failure
+
+volumes:
+  pgdata:
