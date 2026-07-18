@@ -283,13 +283,16 @@ def run_heavy_sync_job():
 @app.on_event("startup")
 async def startup():
     # Warm up SentenceTransformer model to optimize APEX causal engine latency
-    try:
-        logger.info("[STARTUP] Warming up APEX SentenceTransformer model...")
-        from entity_interface.apex_causal import get_encoder
-        get_encoder()
-        logger.info("[STARTUP] APEX SentenceTransformer model warmed up successfully.")
-    except Exception as e:
-        logger.warning(f"[STARTUP] Warning: Failed to warm up SentenceTransformer: {e}")
+    if ENTITY_MODE != "mock":
+        try:
+            logger.info("[STARTUP] Warming up APEX SentenceTransformer model...")
+            from entity_interface.apex_causal import get_encoder
+            get_encoder()
+            logger.info("[STARTUP] APEX SentenceTransformer model warmed up successfully.")
+        except Exception as e:
+            logger.warning(f"[STARTUP] Warning: Failed to warm up SentenceTransformer: {e}")
+    else:
+        logger.info("[STARTUP] Skipping APEX SentenceTransformer warm up in mock mode.")
 
     await init_db()
     await entity_registry._bootstrap_async()

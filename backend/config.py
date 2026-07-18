@@ -84,7 +84,9 @@ class AppSettings(BaseModel):
     @field_validator("DATABASE_URL")
     @classmethod
     def validate_database_url(cls, v: str) -> str:
-        if not v.startswith(("postgresql+asyncpg://", "sqlite+aiosqlite://", "postgresql://")):
+        if v.startswith("postgresql://"):
+            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        if not v.startswith(("postgresql+asyncpg://", "sqlite+aiosqlite://")):
             raise ValueError("DATABASE_URL must start with a valid postgresql or sqlite protocol driver prefix.")
         return v
 
