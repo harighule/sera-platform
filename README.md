@@ -102,3 +102,14 @@ SERA is a state-of-the-art behavioral intelligence platform designed to ingest a
 - **Frontend**: React 18, Vite, Recharts, React Router v7
 - **ML**: CIFN (Continuous Interference Field Network), LiveCausalNetwork, KRONOS orchestrator
 - **Infrastructure**: Docker Compose, nginx, PostgreSQL 16
+
+## Production Security & Deployment Requirements
+
+> [!IMPORTANT]
+> **Before deploying this service to any production or publicly accessible environment, you must adhere to the following safety guidelines:**
+>
+> 1. **TLS Termination / HTTPS**: This service does not configure TLS/HTTPS natively. It must run behind a TLS-terminating reverse proxy (e.g., Nginx, Caddy, or a cloud application load balancer) in any real deployment. Do not expose port 8000 directly to the internet without TLS termination.
+> 2. **Credential Rotation**: Change all database usernames and passwords (`POSTGRES_USER` and `POSTGRES_PASSWORD` in `.env` / `docker-compose.yml`) from their default template values (`sera_user:sera_pass`) to secure, randomized credentials. Never check `.env` files into source control.
+> 3. **API Key Authentication**: In production, do not use the single shared default API key (`sera-demo-2026`). Configure the `API_KEYS` environment variable with a JSON dictionary mapping secure, randomized keys to client identifiers (e.g. `{"secure-key-1": "client-a", "secure-key-2": "client-b"}`) to enforce per-client rate-limiting, revocation, and logging attribution.
+> 4. **Rate Limiting**: Rate limiting is enforced globally at 60 requests/minute per client API key. Adjust this limit in `main.py` if client profiles require different quotas.
+

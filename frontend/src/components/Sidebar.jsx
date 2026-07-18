@@ -5,10 +5,17 @@ import { fetchZolaStatus } from '../api/client'
 const links = [
   { path: '/', icon: '⬡', label: 'Dashboard' },
   { path: '/entities', icon: '◈', label: 'Entities' },
+  { path: '/synthesize', icon: '⌬', label: 'Signal Synthesis' },
+  { path: '/graph', icon: '🕸', label: 'Entity Graph' },
+  { path: '/claims', icon: '⧁', label: 'Claim Credibility' },
+  { path: '/geo', icon: '⎔', label: 'Citation Tracking' },
   { path: '/axiom', icon: '∿', label: 'AXIOM-Φ Monitor' },
   { path: '/zola', icon: '◎', label: 'ZOLA Predictions' },
   { path: '/ai', icon: '✦', label: 'AI Command' },
   { path: '/intel', icon: '⚠', label: 'Dark Intel' },
+  { path: '/causal-graph', icon: '⩕', label: 'Causal Graph' },
+  { path: '/healthcare', icon: '⚕', label: 'Healthcare CMS' },
+  { path: '/executive', icon: '⇆', label: 'Executive Intel' },
 ]
 
 export default function Sidebar() {
@@ -16,7 +23,7 @@ export default function Sidebar() {
   const navigate = useNavigate()
   const [zolaStatus, setZolaStatus] = useState({
     entity_mode: 'mock',
-    stats: { virtual_parameters: 13000000000 },
+    stats: { virtual_parameters: null },
     actual_stored_params: 0,
     wave_basis_size_kb: 0.0
   })
@@ -29,7 +36,7 @@ export default function Sidebar() {
     return () => clearInterval(i)
   }, [])
 
-  const virtualParams = zolaStatus?.stats?.virtual_parameters ?? 13000000000
+  const virtualParams = zolaStatus?.stats?.virtual_parameters ?? 0
   const isOneQuadrillion = virtualParams >= 1e15
   const actualStoredParams = zolaStatus?.actual_stored_params ?? 0
   const waveBasisKb = zolaStatus?.wave_basis_size_kb ?? 0.0
@@ -45,7 +52,7 @@ export default function Sidebar() {
         <span>Intelligence Platform</span>
       </div>
       
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div className="sidebar-links" style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, overflowY: 'auto' }}>
         {links.map(link => (
           <div
             key={link.path}
@@ -90,7 +97,9 @@ export default function Sidebar() {
                 <div style={{ fontSize: 9, color: 'var(--text-muted)', opacity: 0.6 }}>CIFN wave basis (live)</div>
               </div>
               <span style={{ color: 'var(--blue)', fontWeight: 'bold', textAlign: 'right' }}>
-                {zolaStatus?.virtual_parameters?.toLocaleString() ?? '—'}
+                {zolaStatus?.stats?.virtual_parameters !== undefined && zolaStatus?.stats?.virtual_parameters !== null
+                  ? zolaStatus.stats.virtual_parameters.toLocaleString()
+                  : 'N/A'}
               </span>
             </div>
 

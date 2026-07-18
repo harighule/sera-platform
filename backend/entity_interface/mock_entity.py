@@ -45,8 +45,12 @@ class MockEntity(EntityInterface):
         }
 
     async def get_causal_graph(self, entity_id: str) -> dict:
+        # graph_scope = "demo_placeholder": this is fabricated demo data, not real inference.
+        # Do not interpret weights or edges as meaningful causal estimates.
         return {
             "entity_id": entity_id,
+            "graph_scope": "demo_placeholder",
+            "graph_topology_source": "fixed_template_variable_weights",
             "nodes": [
                 {"id": "financial_stress", "weight": round(random.random(), 3)},
                 {"id": "behavioral_anomaly", "weight": round(random.random(), 3)},
@@ -55,5 +59,5 @@ class MockEntity(EntityInterface):
             "edges": [
                 {"from": "financial_stress", "to": "behavioral_anomaly", "strength": 0.72},
                 {"from": "behavioral_anomaly", "to": "state_transition", "strength": 0.85},
-            ]
+            ],
         }

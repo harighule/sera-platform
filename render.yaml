@@ -1,0 +1,62 @@
+services:
+  # ── Backend API (FastAPI) ──────────────────────────────────────────────────
+  - type: web
+    name: sera-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    envVars:
+      - key: ENTITY_MODE
+        value: mock
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:///./sera_db.sqlite3
+      - key: PRODUCTION
+        value: "false"
+      - key: HOST
+        value: "0.0.0.0"
+      - key: PORT
+        value: "8000"
+      - key: CORS_ORIGINS
+        value: "https://sera-frontend.onrender.com,http://localhost:5173"
+      # ── Set these via Render Dashboard → Environment (keep secrets safe) ──
+      - key: AI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: NEO4J_URI
+        sync: false
+      - key: NEO4J_USER
+        sync: false
+      - key: NEO4J_PASSWORD
+        sync: false
+      - key: APIFY_TOKEN
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: AIS_STREAM_KEY
+        sync: false
+
+  # ── Frontend (Vite / React) ────────────────────────────────────────────────
+  - type: web
+    name: sera-frontend
+    runtime: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    rootDir: frontend
+    plan: free
+    envVars:
+      - key: VITE_API_BASE
+        value: https://sera-backend.onrender.com
+      - key: VITE_API_KEY
+        value: sera-demo-2026
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-cache
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

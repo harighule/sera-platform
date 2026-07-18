@@ -1,0 +1,333 @@
+.causal-graph-container {
+  position: relative;
+  width: 100%;
+  height: calc(100vh - 80px);
+  background: radial-gradient(circle at center, #0B0D17 0%, #030408 100%);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.graph-header {
+  padding: 1rem 2rem;
+  background: rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 10;
+}
+
+.graph-header h1 {
+  font-size: 1.5rem;
+  margin: 0;
+  background: linear-gradient(135deg, #00F0FF 0%, #0072FF 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.graph-header-meta {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.graph-control-overlay {
+  position: absolute;
+  top: 80px;
+  left: 20px;
+  width: 320px;
+  max-height: 80%;
+  background: rgba(10, 15, 28, 0.75);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: 12px;
+  padding: 1.25rem;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow-y: auto;
+}
+
+.control-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.control-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--cyan);
+  font-weight: bold;
+}
+
+.search-input-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.search-input {
+  width: 100%;
+  padding: 0.6rem 2rem 0.6rem 0.8rem;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 0.9rem;
+  transition: all 0.3s ease;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--cyan);
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.3);
+}
+
+.search-icon {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.suggestions-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  background: #0D1222;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 15;
+  list-style: none;
+  padding: 0;
+}
+
+.suggestion-item {
+  padding: 0.6rem 1rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.suggestion-item:hover {
+  background: rgba(0, 240, 255, 0.1);
+  color: var(--cyan);
+}
+
+.legend-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 0.8rem;
+  border-radius: 6px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.legend-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.node-details-overlay {
+  position: absolute;
+  top: 80px;
+  right: 20px;
+  width: 320px;
+  background: rgba(10, 15, 28, 0.75);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: 12px;
+  padding: 1.25rem;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+  z-index: 5;
+  color: #fff;
+}
+
+.node-details-title {
+  font-size: 1.1rem;
+  font-weight: bold;
+  margin-bottom: 0.5rem;
+  color: var(--cyan);
+}
+
+.node-details-field {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.node-details-field span:first-child {
+  color: var(--text-secondary);
+}
+
+.node-details-field span:last-child {
+  color: var(--text-primary);
+  font-weight: bold;
+}
+
+.instructions-banner {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 1rem;
+}
+
+.inspect-button {
+  width: 100%;
+  margin-top: 1rem;
+  padding: 0.6rem;
+  background: linear-gradient(135deg, #00F0FF 0%, #0072FF 100%);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-weight: bold;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.inspect-button:hover {
+  opacity: 0.9;
+}
+
+/* ── New additions ─────────────────────────────────────────────────── */
+
+.reset-layout-btn {
+  padding: 6px 14px;
+  background: rgba(0, 240, 255, 0.06);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: 6px;
+  color: var(--cyan);
+  font-size: 12px;
+  font-family: 'Space Mono', monospace;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  letter-spacing: 0.5px;
+}
+
+.reset-layout-btn:hover {
+  background: rgba(0, 240, 255, 0.14);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.2);
+}
+
+.graph-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 7, 18, 0.75);
+  backdrop-filter: blur(8px);
+  z-index: 50;
+}
+
+.graph-loading-text {
+  font-size: 1rem;
+  color: var(--cyan);
+  animation: pulse 1.5s infinite;
+}
+
+.graph-stabilizing-banner {
+  position: absolute;
+  top: 78px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  border-radius: 6px;
+  padding: 6px 18px;
+  font-size: 12px;
+  color: var(--cyan);
+  z-index: 20;
+  animation: pulse 1.5s infinite;
+}
+
+.node-type-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid;
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 1.5px;
+  font-family: 'Space Mono', monospace;
+  margin-bottom: 10px;
+}
+
+.node-details-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.node-details-close:hover {
+  color: var(--text-primary);
+}
+
+.node-details-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  margin: 12px 0;
+}
+
+/* Edge type legend swatches */
+.legend-edge-solid,
+.legend-edge-dashed,
+.legend-edge-dotted {
+  width: 24px;
+  height: 2px;
+  flex-shrink: 0;
+}
+
+.legend-edge-solid {
+  background: rgba(0, 200, 255, 0.7);
+}
+
+.legend-edge-dashed {
+  background: repeating-linear-gradient(
+    to right,
+    rgba(255, 165, 0, 0.7) 0px,
+    rgba(255, 165, 0, 0.7) 6px,
+    transparent 6px,
+    transparent 10px
+  );
+}
+
+.legend-edge-dotted {
+  background: repeating-linear-gradient(
+    to right,
+    rgba(57, 255, 20, 0.7) 0px,
+    rgba(57, 255, 20, 0.7) 2px,
+    transparent 2px,
+    transparent 5px
+  );
+}
+

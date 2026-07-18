@@ -1,0 +1,20 @@
+.table-container {
+    background: #14142a;
+    padding: 20px;
+    border-radius: 12px;
+    border: 1px solid #2a2a4a;
+    max-height: calc(100vh - 300px); /* Leave room for header + stats */
+    overflow: auto;
+    position: relative;
+}
+
+.table-container h3 {
+    margin-top: 0;
+    color: #ccc;
+    font-weight: 400;
+    position: sticky;
+    top: 0;
+    background: #14142a;
+    padding: 10px 0;
+    z-index: 2;
+}

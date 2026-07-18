@@ -61,69 +61,116 @@ class KroneckerScaler:
         self,
         W: torch.Tensor,
         k: int,
-        mode: str = 'output'  # 'output' or 'input' or 'both'
+        mode: str = 'output',       # 'output' | 'input' | 'both'
+        break_symmetry: bool = False
     ) -> torch.Tensor:
         """
-        Expand weight matrix W by factor k.
-        
-        mode='output':  expand output dimension: (m, n) → (k*m, n)
-        mode='input':   expand input dimension:  (m, n) → (m, k*n)
-        mode='both':    expand both:             (m, n) → (k*m, k*n)
+        Function-preserving Kronecker width expansion of a linear map y = W·x.
+
+        The construction is EXACT — f(x; W_k) reproduces f(x; W) to machine
+        precision — PROVIDED the coordinated input/output adaptation is applied
+        (see ``expand_input`` / ``contract_output``). Widening W alone cannot
+        preserve f; the Kronecker identity requires the paired maps.
+
+        mode='input'   (m, n) → (m, k·n):  columns replicated and scaled by 1/k.
+             With  x_k = expand_input(x, k)  (each coord repeated k times):
+                 W_in · x_k = Σ_r (W/k)·x = W·x                      [EXACT]
+        mode='output'  (m, n) → (k·m, n):  rows replicated.
+             With  contract_output(W_out·x, k) = mean over each k-block:
+                 mean_r (W·x) = W·x                                  [EXACT]
+        mode='both'    (m, n) → (k·m, k·n): compose input then output expansion.
+
+        If ``break_symmetry`` is True a mean-zero perturbation of magnitude α*
+        is added so the k copies specialise under training, while the aggregate
+        (summed/averaged) response stays within ``regression_budget`` (the
+        perturbation cancels in expectation across the k block group).
         """
         m, n = W.shape
-        alpha = self.compute_optimal_alpha(W, k)
-        device = W.device
-        dtype = W.dtype
-        
-        if mode == 'output' or mode == 'both':
-            # Expand output (rows): k copies of W, each slightly perturbed
-            # W_expanded = [W + α*E_1; W + α*E_2; ...; W + α*E_k] / k
-            # But scaled so that the average is exactly W
-            
-            blocks = []
-            for i in range(k):
-                # Symmetry-breaking perturbation
-                E_i = torch.randn(m, n, device=device, dtype=dtype)
-                E_i = E_i / (E_i.norm() + 1e-10)  # Unit Frobenius norm
-                
-                # Each block: W + α·E_i (unnormalized)
-                block = W + alpha * E_i
-                blocks.append(block)
-            
-            W_expanded = torch.cat(blocks, dim=0)  # (k*m, n)
-            
-            # Renormalize: the sum over blocks should equal k*W
-            # Currently sum = k*W + α*sum(E_i) ≈ k*W (since E_i mean-zero)
-            # For exact function preservation: normalize each block
-            # W_expanded[i*m:(i+1)*m, :] /= k  -- but then output = sum/k = W ✓
-            # We use a learnable aggregation — initially 1/k for each
-            
-            if mode == 'output':
-                return W_expanded  # (k*m, n)
-        
-        if mode == 'input' or mode == 'both':
-            # Expand input (columns): replicate and scale
-            # W_expanded = [W/k, W/k, ..., W/k] concatenated along dim=1
-            # For input x_k = [x, x, ..., x] (k copies):
-            # W_expanded @ x_k = (W/k @ x) * k = W @ x  ✓
-            
-            W_input_expanded = W.repeat(1, k) / k  # (m, k*n)
-            
-            # Add perturbations for specialization
-            alpha_input = self.compute_optimal_alpha(W.T, k)
-            for i in range(k):
-                E_i = torch.randn(m, n, device=device, dtype=dtype)
-                E_i = E_i / (E_i.norm() + 1e-10)
-                W_input_expanded[:, i*n:(i+1)*n] += alpha_input * E_i
-            
-            if mode == 'input':
-                return W_input_expanded
-            else:
-                # Both: compose the two expansions
-                return W_expanded.repeat(1, k) / k  # Approximate for 'both'
-        
-        return W_expanded
+        device, dtype = W.device, W.dtype
+
+        if mode == 'input':
+            W_k = W.repeat_interleave(k, dim=1) / k                 # (m, k·n)
+            if break_symmetry:
+                W_k = self._break_symmetry_grouped(W_k, k, axis=1)
+            return W_k
+
+        if mode == 'output':
+            W_k = W.repeat_interleave(k, dim=0)                     # (k·m, n)
+            if break_symmetry:
+                W_k = self._break_symmetry_grouped(W_k, k, axis=0)
+            return W_k
+
+        if mode == 'both':
+            W_in = W.repeat_interleave(k, dim=1) / k               # (m, k·n)
+            W_k  = W_in.repeat_interleave(k, dim=0)                # (k·m, k·n)
+            if break_symmetry:
+                W_k = self._break_symmetry_grouped(W_k, k, axis=0)
+                W_k = self._break_symmetry_grouped(W_k, k, axis=1)
+            return W_k
+
+        raise ValueError(f"unknown mode {mode!r}")
+
+    # ── Coordinated adaptation maps (make the expansion function-preserving) ──
+    @staticmethod
+    def expand_input(x: torch.Tensor, k: int) -> torch.Tensor:
+        """x → x ⊗ 1_k  (each input coordinate replicated k times)."""
+        return x.repeat_interleave(k, dim=-1)
+
+    @staticmethod
+    def contract_output(y: torch.Tensor, k: int) -> torch.Tensor:
+        """Average each consecutive group of k outputs (the readout A_k)."""
+        *lead, km = y.shape
+        return y.reshape(*lead, km // k, k).mean(dim=-1)
+
+    def _break_symmetry_grouped(self, W_k: torch.Tensor, k: int, axis: int) -> torch.Tensor:
+        """
+        Add a mean-zero (within each k-block group) perturbation of magnitude α*,
+        so copies specialise while the group aggregate is unchanged → the
+        function-preserving identity holds at step 0 to within regression_budget.
+        """
+        alpha = self.compute_optimal_alpha(W_k if axis == 1 else W_k.T, k)
+        E = torch.randn_like(W_k)
+        if axis == 0:
+            g = E.reshape(W_k.shape[0] // k, k, W_k.shape[1])
+            g = g - g.mean(dim=1, keepdim=True)                    # zero-mean per group
+            E = g.reshape_as(W_k)
+        else:
+            g = E.reshape(W_k.shape[0], W_k.shape[1] // k, k)
+            g = g - g.mean(dim=2, keepdim=True)
+            E = g.reshape_as(W_k)
+        return W_k + alpha * E
     
+    def demonstrate_preservation(self, m: int = 16, n: int = 8, k: int = 4,
+                                 mode: str = 'both', seed: int = 0) -> Dict:
+        """
+        Empirically PROVE function preservation on a random linear layer:
+        build y = x·Wᵀ, expand W by k (with coordinated input/output adaptation),
+        and confirm the widened layer reproduces y to machine precision.
+        """
+        g = torch.Generator().manual_seed(seed)
+        W = torch.randn(m, n, generator=g)
+        x = torch.randn(4, n, generator=g)
+        y_ref = x @ W.T
+
+        if mode == 'input':
+            W_k = self.expand_weight(W, k, 'input')
+            y = self.expand_input(x, k) @ W_k.T
+        elif mode == 'output':
+            W_k = self.expand_weight(W, k, 'output')
+            y = self.contract_output(x @ W_k.T, k)
+        else:  # both
+            W_k = self.expand_weight(W, k, 'both')
+            y = self.contract_output(self.expand_input(x, k) @ W_k.T, k)
+
+        max_diff = (y - y_ref).abs().max().item()
+        return {
+            "mode": mode, "k": k,
+            "original_shape": list(W.shape),
+            "expanded_shape": list(W_k.shape),
+            "max_abs_diff": max_diff,
+            "function_preserved": max_diff < 1e-5,
+        }
+
     def scale_transformer_layer(
         self,
         layer_dict: Dict[str, torch.Tensor],
@@ -188,18 +235,20 @@ class KroneckerScaler:
         model_after,
         test_input: torch.Tensor,
         tolerance: float = 1e-3
-    ) -> bool:
+    ) -> Dict:
         """
-        Verify that the expanded model computes the same function.
-        Tests on a batch of inputs.
+        Verify that the expanded model computes the same function on a batch.
+        Returns a dict {preserved, rel_diff, max_diff} (was previously an
+        inconsistent bool/tuple — now a single well-typed result).
         """
         with torch.no_grad():
             out_before = model_before(test_input)
             out_after = model_after(test_input)
-        
+
         max_diff = (out_before - out_after).abs().max().item()
         rel_diff = max_diff / (out_before.abs().max().item() + 1e-10)
-        
-        return rel_diff < tolerance, rel_diff
+
+        return {"preserved": rel_diff < tolerance,
+                "rel_diff": rel_diff, "max_diff": max_diff}
 
 

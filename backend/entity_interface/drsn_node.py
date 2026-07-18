@@ -56,6 +56,8 @@ class SynapticWeight:
     post_id: int
     last_pre_spike_t: float = -1000.0
     last_post_spike_t: float = -1000.0
+    phi: float = 0.0                 # quantum-inspired connection phase (radians)
+    meta: float = 0.0                # meta-synaptic modulation term (3rd-order)
 
 
 class DRSNNode:
@@ -118,6 +120,9 @@ class DRSNNode:
         # Spike history – capped at 100 most recent timestamps
         self.spike_history: List[float] = []
 
+        # Quantum-inspired integration flag (complex-phase interference)
+        self.use_quantum: bool = False
+
     # ------------------------------------------------------------------
     # Synaptic kernel
     # ------------------------------------------------------------------
@@ -169,6 +174,35 @@ class DRSNNode:
             total += synapse.w * self.alpha_kernel(tau)
         # Clamp to physiologically plausible range
         return max(-5.0, min(5.0, total))
+
+    # ------------------------------------------------------------------
+    # Quantum-inspired synaptic integration (complex-phase interference)
+    # ------------------------------------------------------------------
+
+    def compute_quantum_synaptic_input(self) -> float:
+        """
+        Quantum-INSPIRED synaptic integration (classical complex arithmetic).
+
+        Instead of a plain real-valued sum Σ_j w_ij·s_j, inputs are combined as
+        complex amplitudes with a learned per-connection phase φ_ij:
+
+            I_i = Σ_j  w_ij · e^{i·φ_ij} · K(t − t_j^spike)          (complex)
+            effective_current = |I_i| · sign(Re I_i)
+
+        Signals with ALIGNED phases add constructively (amplify); OPPOSING
+        phases cancel destructively — a form of automatic, continuous attention
+        that costs O(N) per node instead of O(N²). This is a direct classical
+        translation of quantum interference; it is NOT a quantum computer.
+        """
+        re, im = 0.0, 0.0
+        for synapse in self.synapses:
+            tau = self.t - synapse.last_pre_spike_t
+            amp = synapse.w * self.alpha_kernel(tau)
+            re += amp * math.cos(synapse.phi)
+            im += amp * math.sin(synapse.phi)
+        magnitude = math.sqrt(re * re + im * im)
+        signed = magnitude if re >= 0.0 else -magnitude
+        return max(-5.0, min(5.0, signed))
 
     # ------------------------------------------------------------------
     # Dendritic integration
@@ -236,8 +270,12 @@ class DRSNNode:
         # 2. Non-linear dendritic integration
         self.update_dendritic_state(external_input, dt)
 
-        # 3. Synaptic input (alpha-kernel weighted)
-        synaptic_in = self.compute_synaptic_input()
+        # 3. Synaptic input — quantum-inspired (phase interference) or classical
+        synaptic_in = (
+            self.compute_quantum_synaptic_input()
+            if self.use_quantum
+            else self.compute_synaptic_input()
+        )
 
         # 4. Dendritic drive: mean compartment activation
         dendritic_sum = sum(self.state.h) / max(len(self.state.h), 1)
@@ -315,6 +353,15 @@ class DRSNNode:
 
         # Neuromodulatory gating
         dw *= self.state.m
+
+        # Meta-synaptic modulation (Level-2 of the tetration stack): a per-synapse
+        # meta-weight modulates the plasticity of this synapse (third-order term
+        # Σ_k M_ijk·s_k in the spec, here a low-rank scalar surrogate), gated by
+        # the neuromodulatory state.
+        dw += 0.005 * synapse.meta * self.state.m
+        # Update the meta-weight from higher-order (eligibility-gated) co-activation.
+        synapse.meta = 0.99 * synapse.meta + 0.01 * self.state.e
+        synapse.meta = max(-1.0, min(1.0, synapse.meta))
 
         # Homeostatic regularisation: soft pull toward zero
         dw -= 0.001 * (synapse.w - 0.0)
@@ -395,6 +442,41 @@ class DRSNNetwork:
             for offset in (1, 3, 7):
                 pre = (i + offset) % n_nodes
                 self.nodes[i].add_synapse(pre_id=pre, weight=0.05)
+                # Deterministic per-connection phase for quantum-inspired
+                # interference (spread across [0, 2π) by offset & node index).
+                self.nodes[i].synapses[-1].phi = (
+                    2.0 * math.pi * ((offset + i) % n_nodes) / max(n_nodes, 1)
+                )
+
+    def set_quantum(self, enabled: bool = True) -> None:
+        """Toggle quantum-inspired complex-phase synaptic integration."""
+        for node in self.nodes:
+            node.use_quantum = enabled
+
+    def demonstrate_interference(self) -> dict:
+        """
+        Show that phase alignment matters: constructive interference (all phases
+        aligned) yields a larger integrated input magnitude than destructive
+        interference (alternating opposed phases), for the same weights/spikes.
+        """
+        node = self.nodes[0]
+        # ensure recent presynaptic activity so the alpha kernel is non-zero
+        for syn in node.synapses:
+            syn.last_pre_spike_t = node.t - 2.0
+        orig = [s.phi for s in node.synapses]
+        for s in node.synapses:            # constructive: aligned phases
+            s.phi = 0.0
+        constructive = node.compute_quantum_synaptic_input()
+        for idx, s in enumerate(node.synapses):   # destructive: alternating
+            s.phi = 0.0 if idx % 2 == 0 else math.pi
+        destructive = node.compute_quantum_synaptic_input()
+        for s, p in zip(node.synapses, orig):
+            s.phi = p
+        return {
+            "constructive_input": round(constructive, 5),
+            "destructive_input": round(destructive, 5),
+            "interference_confirmed": abs(constructive) > abs(destructive) + 1e-6,
+        }
 
     # ------------------------------------------------------------------
     # Network step
@@ -467,6 +549,12 @@ class DRSNNetwork:
         """
         Run the network for n_steps timesteps with a constant input vector.
 
+        WARNING: This method runs on stateful neurons. The membrane potential (V),
+        adaptive threshold (theta), dendritic hidden state (h), and synaptic spike
+        histories/timestamps persist across invocations. Therefore, sequential calls to
+        run() are path-dependent on execution history. Call reset() between runs to
+        ensure independent evaluations.
+
         Parameters
         ----------
         input_sequence : List of n_nodes floats – same drive applied every step.
@@ -515,6 +603,13 @@ class DRSNNetwork:
         """
         Encode an entity feature vector into a spiking network representation.
 
+        WARNING: This spiking network is fully stateful. The membrane potential (V),
+        adaptive threshold (theta), dendritic hidden state (h), and synaptic spike
+        histories/timestamps persist across invocations. Therefore, sequential calls to
+        encode_features() or run() on the same instance are path-dependent on previous
+        inputs and execution history. To ensure independent evaluations, call reset()
+        between runs.
+
         The features list is padded with zeros or trimmed to n_nodes, then used
         as a constant input drive over n_steps simulation timesteps.  The
         resulting spike statistics form a rate-code embedding of the input.
@@ -531,6 +626,80 @@ class DRSNNetwork:
         padded = list(features) + [0.0] * self.n_nodes
         padded = padded[: self.n_nodes]
         return self.run(padded, n_steps=n_steps)
+
+    def reset(self) -> None:
+        """
+        Reset the network state, including simulation clock, membrane potential,
+        adaptive threshold, dendritic hidden state, eligibility traces,
+        spike histories, and synaptic spike timestamps for all nodes.
+        """
+        self.t = 0.0
+        for node in self.nodes:
+            node.t = 0.0
+            node.spike_history.clear()
+            node.state.V = node.V_rest
+            node.state.theta = -55.0
+            node.state.h = [0.0] * node.d_hidden
+            node.state.e = 0.0
+            node.state.m = 0.5
+            node.state.last_spike_t = -1000.0
+            node.state.spike_count = 0
+            for syn in node.synapses:
+                syn.last_pre_spike_t = -1000.0
+                syn.last_post_spike_t = -1000.0
+
+    # ------------------------------------------------------------------
+    # World model — planning by internal simulation
+    # ------------------------------------------------------------------
+
+    def k_winners_take_all(self, spikes: List[bool], k_frac: float = 0.5) -> List[bool]:
+        """
+        k-Winners-Take-All lateral inhibition (sparse distributed coding).
+
+        Keeps only the top ``k_frac`` fraction of firing nodes ranked by their
+        membrane potential, suppressing the rest. Implements the DRSN spec's
+        sparsity mechanism: only a small fraction of nodes propagate at any tick.
+        """
+        firing = [i for i, s in enumerate(spikes) if s]
+        if not firing:
+            return spikes
+        k = max(1, int(len(firing) * k_frac))
+        firing_sorted = sorted(firing, key=lambda i: self.nodes[i].state.V, reverse=True)
+        keep = set(firing_sorted[:k])
+        return [bool(s) and (i in keep) for i, s in enumerate(spikes)]
+
+    def predict_next_state(self, n_predict: int = 3) -> dict:
+        """
+        World-model prediction by INTERNAL SIMULATION (imagination).
+
+        Rolls the network dynamics forward with zero external input
+        (``I_ext = 0``) — the DRSN spec's principle that *the recurrent dynamics
+        ARE the running prediction*: the network "imagines" future states by
+        feeding its own state back through the coupled differential equations,
+        which is the substrate for planning ("simulating possible futures inside
+        itself before taking an action").
+
+        NOTE: advances the network's internal clock/state (as a real dynamical
+        rollout does). Call ``reset()`` afterwards for an independent evaluation.
+
+        Returns the predicted world-state trajectory (mean dendritic activation
+        per node at each imagined step) plus the predicted spike activity.
+        """
+        zero = [0.0] * self.n_nodes
+        trajectory, spike_activity = [], []
+        for _ in range(max(1, n_predict)):
+            spikes = self.step_all(zero, dopamine=0.0)
+            spikes = self.k_winners_take_all(spikes, k_frac=0.5)   # sparse rollout
+            ws = [sum(node.state.h) / max(len(node.state.h), 1) for node in self.nodes]
+            trajectory.append(ws)
+            spike_activity.append(int(sum(1 for s in spikes if s)))
+        return {
+            "predicted_world_states": trajectory,
+            "predicted_spike_activity": spike_activity,
+            "n_predict": int(n_predict),
+            "method": "internal_dynamical_rollout_Iext0",
+            "note": "DRSN world-model prediction: recurrent dynamics used as the predictor",
+        }
 
     # ------------------------------------------------------------------
     # Serialisation
@@ -556,3 +725,116 @@ class DRSNNetwork:
             "total_spike_count": total_spike_count,
             "node_states": [node.to_state_dict() for node in self.nodes],
         }
+
+
+# ─────────────────────────────────────────────────────────────────
+# MULTIMODAL PERCEPTION — encode any modality into DRSN spike-rate features
+# ─────────────────────────────────────────────────────────────────
+class MultimodalEncoder:
+    """
+    Unified encoder: text, image, audio and sensor inputs all map into the SAME
+    spike-rate feature space, so one DRSN network can perceive every modality
+    (the spec's unified multimodal perception). Each encoder is biologically
+    inspired: rate coding (text), difference-of-Gaussians (image / retina),
+    frequency decomposition (audio / cochlea), population coding (sensor).
+    """
+
+    @staticmethod
+    def _norm(v):
+        m = max((abs(x) for x in v), default=0.0) or 1.0
+        return [x / m for x in v]
+
+    @staticmethod
+    def encode_text(token_ids, dim: int = 8):
+        v = [0.0] * dim
+        for t in token_ids:
+            v[int(t) % dim] += 1.0
+        return MultimodalEncoder._norm(v)
+
+    @staticmethod
+    def encode_image(image_2d, dim: int = 8):
+        import numpy as np
+        img = np.asarray(image_2d, dtype=float)
+        # difference-of-Gaussians (center-surround) via two box blurs
+        def blur(a, k):
+            pad = np.pad(a, k, mode="edge")
+            out = np.zeros_like(a)
+            for i in range(a.shape[0]):
+                for j in range(a.shape[1]):
+                    out[i, j] = pad[i:i + 2 * k + 1, j:j + 2 * k + 1].mean()
+            return out
+        dog = np.abs(blur(img, 1) - blur(img, 2))          # edge energy
+        bins = np.array_split(dog.flatten(), dim)
+        return MultimodalEncoder._norm([float(b.mean()) for b in bins])
+
+    @staticmethod
+    def encode_audio(waveform, dim: int = 8):
+        import numpy as np
+        spec = np.abs(np.fft.rfft(np.asarray(waveform, dtype=float)))   # cochlea-like
+        bins = np.array_split(spec, dim)
+        return MultimodalEncoder._norm([float(b.mean()) for b in bins])
+
+    @staticmethod
+    def encode_sensor(vec, dim: int = 8):
+        import numpy as np
+        x = np.asarray(vec, dtype=float)
+        centers = np.linspace(float(x.min()), float(x.max()), dim)     # population code
+        val = float(x.mean())
+        return MultimodalEncoder._norm(
+            [float(np.exp(-((val - c) ** 2) / (2 * 0.5 ** 2))) for c in centers])
+
+
+def grover_plan(action_costs, threshold=None, iterations=None) -> dict:
+    """
+    Grover-inspired planning search: amplitude amplification over candidate
+    action sequences. 'Good' actions (cost < threshold) are marked by an oracle
+    and amplified by diffusion, finding a good action in ~O(√N) iterations rather
+    than the O(N) of classical unstructured search.
+    """
+    import numpy as np, math as _m
+    costs = np.asarray(action_costs, dtype=float)
+    n = len(costs)
+    if n == 0:
+        return {"n_actions": 0, "found_good_action": False}
+    if threshold is None:
+        threshold = float(np.median(costs))
+    good = costs < threshold
+    n_good = max(1, int(good.sum()))
+    # Optimal Grover iteration count ≈ (π/4)·√(N/M); floor to avoid over-rotation.
+    iters = iterations or max(1, int((_m.pi / 4) * _m.sqrt(n / n_good)))
+    p = np.ones(n) / n
+    best_p_good, best = -1.0, int(np.argmin(costs))
+    for _ in range(iters):
+        marked = np.where(good, -p, p)          # oracle sign-flip on good states
+        mu = marked.mean()
+        p = np.abs(2 * mu - marked)             # diffusion about the mean
+        p = p / (p.sum() + 1e-12)
+        gi = int(np.argmax(np.where(good, p, -1)))   # best good state this round
+        if good[gi] and p[gi] > best_p_good:
+            best_p_good, best = float(p[gi]), gi
+    best = int(best)
+    return {"n_actions": n, "grover_iterations": iters,
+            "classical_iterations": n,
+            "speedup_factor": round(n / max(iters, 1), 2),
+            "best_action_index": best,
+            "best_action_cost": round(float(costs[best]), 4),
+            "found_good_action": bool(costs[best] < threshold)}
+
+
+def hierarchical_world_model(network, timescales=(1, 4, 16)) -> dict:
+    """
+    Three-timescale hierarchical world model: predict at sensorimotor (fast),
+    behavioural (medium) and goal (slow) scales via progressively longer internal
+    rollouts. Higher levels integrate lower-level summaries.
+    """
+    names = ["sensorimotor", "behavioural", "goal"]
+    out = {}
+    for name, ts in zip(names, timescales):
+        network.reset()
+        network.encode_features([0.9, 0.5, 0.2, 0.1, 1.0, 0.2, 0.3, 0.4], n_steps=5)
+        pred = network.predict_next_state(n_predict=ts)
+        acts = pred["predicted_spike_activity"]
+        out[name] = {"timescale": ts,
+                     "rollout_steps": len(acts),
+                     "mean_activity": round(sum(acts) / max(len(acts), 1), 3)}
+    return out

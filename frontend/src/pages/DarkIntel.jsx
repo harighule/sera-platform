@@ -1,6 +1,23 @@
-import { useEffect, useState, useRef } from 'react'
-import { fetchClassified } from '../api/client'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import GlassCard from '../components/GlassCard'
+
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+const AUTH_HEADERS = { 'X-API-Key': import.meta.env.VITE_API_KEY ?? 'sera-demo-2026' }
+
+async function fetchBriefings(clearance = 'ALL') {
+  try {
+    const url = clearance === 'ALL'
+      ? `${BASE}/api/dark-intel/briefings`
+      : `${BASE}/api/dark-intel/briefings?clearance=${encodeURIComponent(clearance)}`
+    const r = await fetch(url, { headers: AUTH_HEADERS })
+    if (!r.ok) return []
+    const data = await r.json()
+    return Array.isArray(data) ? data : []
+  } catch (e) {
+    console.error('fetchBriefings failed:', e)
+    return []
+  }
+}
 
 // Decrypt-on-hover text scrambling component
 function DecryptText({ text }) {
@@ -92,12 +109,23 @@ export default function DarkIntel() {
   const [expiredIds, setExpiredIds] = useState(new Set())
   const [clearanceFilter, setClearanceFilter] = useState('ALL')
 
-  useEffect(() => {
-    fetchClassified().then(data => {
-      setBriefs(data)
-      setLoading(false)
-    })
+  const loadBriefings = useCallback(async (clearance) => {
+    setLoading(true)
+    const data = await fetchBriefings(clearance)
+    setBriefs(data)
+    setLoading(false)
   }, [])
+
+  useEffect(() => {
+    loadBriefings('ALL')
+  }, [])
+
+  const handleClearanceChange = (lvl) => {
+    setClearanceFilter(lvl)
+    // Pass level or ALL to API
+    const apiClearance = lvl === 'ALL' ? 'ALL' : lvl
+    loadBriefings(apiClearance)
+  }
 
   const handleExpire = (id) => {
     setExpiredIds(prev => {
@@ -106,6 +134,7 @@ export default function DarkIntel() {
       return next
     })
   }
+
 
   // Parse redacted text and replace [REDACTED] markers with interactive DecryptText components
   const renderRedactedContent = (rawText) => {
@@ -127,10 +156,7 @@ export default function DarkIntel() {
 
   const clearanceLevels = ['ALL', 'LEVEL 2 (OPERATOR)', 'LEVEL 3 (ANALYST)', 'LEVEL 4 (DIRECTOR)', 'LEVEL 5 (ADMIN)']
 
-  const filteredBriefs = briefs.filter(b => {
-    if (clearanceFilter === 'ALL') return true
-    return b.clearance_level === clearanceFilter
-  })
+  // Filtering is handled by the API - briefs array already filtered by clearance
 
   return (
     <div style={{ animation: 'fadeUp 0.4s ease' }} className="crt-overlay">
@@ -196,7 +222,7 @@ export default function DarkIntel() {
           <button
             key={lvl}
             className={`btn mono ${clearanceFilter === lvl ? 'btn-primary' : ''}`}
-            onClick={() => setClearanceFilter(lvl)}
+            onClick={() => handleClearanceChange(lvl)}
             style={{ 
               fontSize: '10px', 
               padding: '6px 12px', 
@@ -217,13 +243,13 @@ export default function DarkIntel() {
         <div style={{ padding: '80px', textAlign: 'center', color: 'var(--text-muted)' }} className="mono">
           Decrypting secure databanks...
         </div>
-      ) : filteredBriefs.length === 0 ? (
+      ) : briefs.length === 0 ? (
         <div style={{ padding: '80px', textAlign: 'center', color: 'var(--text-muted)' }} className="mono">
           No briefings matching active clearance certificate.
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          {filteredBriefs.map(brief => {
+          {briefs.map(brief => {
             const isExpired = expiredIds.has(brief.id)
             const classColor = 
               brief.classification === 'EYES ONLY' ? 'var(--red)' :

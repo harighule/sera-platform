@@ -262,6 +262,13 @@ body {
   transform: scale(1.15) rotate(5deg);
 }
 
+.sidebar-links {
+  scrollbar-width: none; /* Firefox */
+}
+.sidebar-links::-webkit-scrollbar {
+  display: none; /* Safari and Chrome */
+}
+
 .sidebar-status {
   margin-top: auto;
   padding: 20px 24px;

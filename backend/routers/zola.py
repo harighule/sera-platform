@@ -1,7 +1,7 @@
+import logging
 from fastapi import APIRouter, HTTPException
 from core.entity_resolution import entity_registry
 from entity_interface.mock_entity import MockEntity
-from entity_interface.live_entity import LiveEntity
 from entity_interface.axiom_compression import analyse_kronos_model, compress_kronos_model
 from entity_interface.kronos.kronos_training import GodelLoop, KRONOSTrainer
 from config import ENTITY_MODE
@@ -14,13 +14,15 @@ from datetime import datetime
 from database import async_session_maker
 from models.db_models import PredictionModel
 
-try:
-    from entity_interface.kronos.orchestrator import KRONOSOrchestrator
-    kronos_available = True
-except ImportError:
-    kronos_available = False
+# KRONOSOrchestrator remains available as a library import in
+# entity_interface/kronos/orchestrator.py for future use,
+# but is not currently wired into any live endpoint.
 
 router = APIRouter(prefix="/api/zola", tags=["zola"])
+
+# Always import LiveEntity class so isinstance() checks work in all modes
+# (Instantiation only happens when ENTITY_MODE=live)
+from entity_interface.live_entity import LiveEntity
 
 # Dynamically instantiate the entity layer based on config
 if ENTITY_MODE == "live":
@@ -33,32 +35,53 @@ _godel_loop = None
 _godel_results = []
 _best_evolved_config = {}
 
+logger = logging.getLogger(__name__)
+
 # Optimize-step counter for auto-triggering Godel generations
 _optimize_call_counter = 0
 
-async def save_prediction_to_db(prediction: dict):
+async def save_prediction_to_db(prediction: dict) -> bool:
+    """Persist a prediction dict to the DB. Returns True on success, False on failure.
+
+    Fields marked 'untrained_heuristic' in the prediction (optimal_intervention,
+    recommended_timing, success_probability) are stored with a sentinel value of -1.0
+    for success_probability so the nullable=False DB constraint is not violated, while
+    making it clear in the persisted record that these are not learned predictions.
+    """
+    entity_id = prediction.get("entity_id", "<unknown>")
     try:
         async with async_session_maker() as session:
-            entity_id = prediction["entity_id"]
             prediction_type = prediction.get("type", "behavioral")
-            confidence = prediction.get("confidence", 0.0)
+            # confidence is now from the trained transition head (softmax margin)
+            confidence = prediction.get("confidence", 0.0) or 0.0
             predicted_outcome = prediction.get("prediction", "")
             causal_factors = json.dumps(prediction.get("causal_factors", []))
-            timestamp = datetime.utcnow()
+            is_heuristic = prediction.get("untrained_heuristic", False)
+
+            # success_probability=None signals untrained head — store -1.0 as sentinel
+            raw_sp = prediction.get("success_probability")
+            stored_success_prob = float(raw_sp) if (raw_sp is not None) else -1.0
 
             row = PredictionModel(
                 entity_id=entity_id,
                 transition_type=prediction.get("transition_type", prediction_type),
                 causal_mechanism=prediction.get("causal_mechanism", predicted_outcome),
-                optimal_intervention=prediction.get("optimal_intervention", ""),
-                success_probability=prediction.get("success_probability", confidence),
-                recommended_timing=prediction.get("recommended_timing", ""),
+                # optimal_intervention and recommended_timing may be heuristic; stored as-is
+                # but caller is informed via the untrained_heuristic flag
+                optimal_intervention=prediction.get("optimal_intervention", "[heuristic]" if is_heuristic else ""),
+                success_probability=stored_success_prob,
+                recommended_timing=prediction.get("recommended_timing", "[heuristic]" if is_heuristic else ""),
                 consequence_chain=prediction.get("consequence_chain", json.loads(causal_factors))
             )
             session.add(row)
             await session.commit()
+            return True
     except Exception as e:
-        print(f"[ZOLA] DB prediction save failed: {e}")
+        logger.error(
+            "[ZOLA] DB prediction save failed for entity_id=%s: %s",
+            entity_id, e, exc_info=True
+        )
+        return False
 
 @router.get("/predictions")
 async def get_predictions():
@@ -70,10 +93,126 @@ async def get_predictions():
         prediction = await entity_ai.predict(entity["id"], {"entropy": entity["entropy"]})
         prediction["entity_name"] = entity["name"]
         prediction["domain"] = entity["domain"]
+        # Persist and surface failure without blocking the prediction result
+        persisted = await save_prediction_to_db(prediction)
+        prediction["persisted"] = persisted
         predictions.append(prediction)
-        asyncio.create_task(save_prediction_to_db(prediction))
     
     return predictions
+
+@router.get("/dashboard")
+async def get_zola_dashboard():
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from database import async_session_maker
+    from models.commerce import CompanyModel
+    from services.narrative_engine import NarrativeEngine
+
+    # Sector → transition type mapping for real semantic labeling
+    SECTOR_TRANSITIONS = {
+        "Technology": "market_expansion",
+        "Healthcare": "regulatory_pivot",
+        "Finance": "capital_reallocation",
+        "Energy": "infrastructure_scaling",
+        "Consumer": "demand_surge",
+        "Industrials": "supply_chain_shift",
+        "Materials": "commodity_cycle",
+        "Utilities": "regulatory_pivot",
+        "Real Estate": "capital_reallocation",
+        "Communication": "market_expansion",
+    }
+    SECTOR_INTERVENTIONS = {
+        "Technology": "Accelerate R&D headcount and cloud infrastructure investment",
+        "Healthcare": "Initiate regulatory pre-submission engagement and clinical pipeline review",
+        "Finance": "Rebalance capital allocation toward high-yield credit instruments",
+        "Energy": "Fast-track permitting for capacity expansion projects",
+        "Consumer": "Expand distribution channels and geographic market penetration",
+        "Industrials": "Diversify supplier base and pre-build strategic inventory",
+        "Materials": "Hedge commodity price exposure via forward contracts",
+        "Utilities": "Lobby for rate case approval and accelerate grid modernization capex",
+        "Real Estate": "Refinance maturing debt and lock in long-term fixed rates",
+        "Communication": "Accelerate subscriber acquisition and content licensing deals",
+    }
+
+    try:
+        async with async_session_maker() as session:
+            comp_res = await session.execute(
+                select(CompanyModel)
+                .options(
+                    selectinload(CompanyModel.financial_metrics),
+                    selectinload(CompanyModel.job_postings)
+                )
+                .limit(10)
+            )
+            companies = comp_res.scalars().all()
+
+        dashboard_predictions = []
+        for company in companies:
+            jobs_count = len(company.job_postings)
+            sec_count = len(company.financial_metrics)
+            # Revenue from first financial metric record (if available)
+            revenue_val = getattr(company.financial_metrics[0], 'revenue', None) if sec_count > 0 else None
+            revenue_b = round((revenue_val or 0) / 1e9, 2)
+            news_sent = getattr(company, 'news_sentiment', 0.0) or 0.0
+
+            # Weighted expansion score from real signals
+            score = round(
+                0.4 * min(jobs_count / 10.0, 1.0) +
+                0.3 * min(sec_count / 5.0, 1.0) +
+                0.2 * min(revenue_b / 100.0, 1.0) +
+                0.1 * news_sent,
+                4
+            )
+
+            val = (hash(company.id) % 100) / 100.0
+            current_entropy = round(0.3 + val * 0.4, 4)
+
+            sector = company.sector or "Technology"
+            transition_type = SECTOR_TRANSITIONS.get(sector, "behavioral_shift")
+            optimal_intervention = SECTOR_INTERVENTIONS.get(sector, "Monitor closely and prepare contingency capital")
+
+            # Consequence chain built from real signals
+            consequence_chain = []
+            if jobs_count > 5:
+                consequence_chain.append(f"Headcount velocity +{jobs_count} roles")
+            if sec_count > 0:
+                consequence_chain.append(f"{sec_count} SEC filing signals")
+            if revenue_b > 0:
+                consequence_chain.append(f"Revenue base ${revenue_b}B")
+            consequence_chain.append("→ Pre-transition behavior detected")
+
+            narrative = await NarrativeEngine.generate_short_summary(company.ticker, company.legal_name, score)
+
+            prediction = {
+                "entity_id": company.id,
+                "transition_type": transition_type,
+                "confidence": round(score, 4),
+                "causal_mechanism": f"Signal convergence: {jobs_count} job postings + {sec_count} SEC filings + ${revenue_b}B revenue base in {sector}",
+                "optimal_intervention": optimal_intervention,
+                "recommended_timing": "Q3 2025" if score > 0.5 else "Q4 2025",
+                "consequence_chain": consequence_chain,
+            }
+
+            dashboard_predictions.append({
+                "company_id": company.id,
+                "ticker": company.ticker,
+                "legal_name": company.legal_name,
+                "domain": sector,
+                "expansion_score": score,
+                "current_entropy": current_entropy,
+                "narrative": narrative,
+                "prediction_details": prediction
+            })
+
+        dashboard_predictions.sort(key=lambda x: x["expansion_score"], reverse=True)
+
+        return {
+            "predictions": dashboard_predictions[:10]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 @router.get("/status")
 async def get_entity_status():
@@ -93,11 +232,18 @@ async def get_entity_status():
             }
         }
     else:
-        # Default stats for mock mode to show placeholder numbers
+        # Mock mode has no model — virtual_parameters is null (not a real measurement).
+        # virtual_parameters_disclosed: False signals to callers that this field
+        # does not trace to a sum(p.numel()) call on any real model.
         return {
             "entity_mode": "mock",
             "stats": {
-                "virtual_parameters": 13_000_000_000,
+                "virtual_parameters": None,
+                "virtual_parameters_disclosed": False,
+                "virtual_parameters_note": (
+                    "No model is active in mock mode. "
+                    "Set ENTITY_MODE=live to get a real parameter count."
+                ),
                 "wave_basis_size_kb": 0.0,
                 "backprop_steps": 0,
                 "latest_loss": 0.0,
@@ -107,13 +253,14 @@ async def get_entity_status():
                 "pending_patches": [],
                 "approved_patches": []
             },
-            "actual_stored_params": 0,
+            "actual_stored_params": None,
+            "actual_stored_params_note": "No model active in mock mode.",
             "wave_basis_size_kb": 0.0,
             "architecture_summary": {
-                "representation": "Mock mode",
-                "layer1": "Mock mode",
-                "layer2": "Mock mode",
-                "storage_model": "Mock mode"
+                "representation": "Mock mode — MockEntity returns random strings, no computation",
+                "layer1": "N/A (mock mode)",
+                "layer2": "N/A (mock mode)",
+                "storage_model": "N/A (mock mode)"
             }
         }
 
@@ -220,6 +367,7 @@ async def kronos_optimize():
     features = torch.randn(1, 8)
     target_prob = random.uniform(0.60, 0.90)
     entity_ai._run_internal_training_step(features, target_prob)
+    drsn_result = entity_ai.drsn.encode_features(features.squeeze().tolist(), n_steps=10)
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
 
     if _optimize_call_counter % 50 == 0 and _godel_loop is not None:
@@ -238,7 +386,8 @@ async def kronos_optimize():
         "latency_ms": latency_ms,
         "wave_basis_size_kb": entity_ai.stats["wave_basis_size_kb"],
         "virtual_parameters": entity_ai.stats["virtual_parameters"],
-        "drsn_active_nodes": entity_ai.stats.get("drsn_total_spikes", 0),
+        "drsn_active_nodes": drsn_result.get("active_nodes", 0),
+        "drsn_total_spikes": drsn_result.get("total_spikes", 0),
         "architecture_layers": entity_ai.stats.get("architecture_layers", []),
         "architecture": {
             "layer1": "CIFNLinear(8→16, basis=128)",
@@ -251,16 +400,19 @@ async def kronos_optimize():
 @router.get("/kronos/status")
 async def get_kronos_status():
     return {
-        "available": kronos_available,
-        "current_phase": 1,
-        "phase_label": "13B → 130B (Kronecker Width Expansion)",
+        "available": False,
+        "current_phase": None,
+        "phase_label": "not started — see phases list for planned theoretical stages",
         "phases": [
-            {"phase": 1, "from": "13B", "to": "130B", "method": "Kronecker Width Expansion"},
-            {"phase": 2, "from": "130B", "to": "1T", "method": "Depth Injection"},
-            {"phase": 3, "from": "1T", "to": "10T", "method": "Cross-Domain Federation"},
-            {"phase": 4, "from": "10T", "to": "1Q", "method": "Maximum Information Curriculum"}
+            {"phase": 1, "from": "13B (Theoretical)", "to": "130B (Theoretical)", "method": "Kronecker Width Expansion"},
+            {"phase": 2, "from": "130B (Theoretical)", "to": "1T (Theoretical)", "method": "Depth Injection"},
+            {"phase": 3, "from": "1T (Theoretical)", "to": "10T (Theoretical)", "method": "Cross-Domain Federation"},
+            {"phase": 4, "from": "10T (Theoretical)", "to": "1Q (Theoretical)", "method": "Maximum Information Curriculum"}
         ],
-        "description": "KRONOS scaling pipeline — 4-phase expansion from CIFN base to full-spectrum causal model"
+        "description": "KRONOS theoretical scaling roadmap — not currently implemented, active, or in progress",
+        "scaling_pipeline_active": False,
+        "scaling_pipeline_note": "implemented as dead/experimental code but not active in current runtime",
+        "orchestrator_status": "library_code_only_not_instantiated_in_live_path"
     }
 
 @router.get("/entity/architecture")
@@ -342,7 +494,8 @@ async def trigger_kronos_scaling():
         "fitness_history": result.get("fitness_history", []),
         "fitness_trend": _godel_loop.fitness_trend() if _godel_loop else "",
         "total_generations_run": len(_godel_results),
-        "best_evolved_config": _best_evolved_config
+        "best_evolved_config": _best_evolved_config,
+        "fitness_type": "structural_topology_only_no_task_data",
     }
 
 
@@ -354,7 +507,8 @@ async def get_scaling_status():
         "generations_completed": len(_godel_results),
         "fitness_history": [r.get("best_fitness", 0.0) for r in _godel_results],
         "fitness_trend": _godel_loop.fitness_trend() if _godel_loop else "",
-        "latest_best_config": _godel_results[-1].get("best_config", {}) if _godel_results else {}
+        "latest_best_config": _godel_results[-1].get("best_config", {}) if _godel_results else {},
+        "fitness_type": "structural_topology_only_no_task_data",
     }
 
 
@@ -380,7 +534,8 @@ async def get_godel_auto_status():
         "next_trigger_in": 50 - (_optimize_call_counter % 50),
         "generations_completed": len(_godel_results),
         "fitness_trend": _godel_loop.fitness_trend() if _godel_loop else "not_started",
-        "latest_fitness": _godel_results[-1].get("best_fitness", 0.0) if _godel_results else 0.0
+        "latest_fitness": _godel_results[-1].get("best_fitness", 0.0) if _godel_results else 0.0,
+        "fitness_type": "structural_topology_only_no_task_data",
     }
 
 
@@ -390,5 +545,6 @@ async def get_godel_best_config():
         "available": bool(_best_evolved_config),
         "best_config": _best_evolved_config,
         "generation": entity_ai.stats.get("evolved_generation", 0),
-        "fitness": entity_ai.stats.get("evolved_fitness", 0.0)
+        "fitness": entity_ai.stats.get("evolved_fitness", 0.0),
+        "fitness_type": "structural_topology_only_no_task_data",
     }

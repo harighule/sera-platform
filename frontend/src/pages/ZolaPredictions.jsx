@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import {
-  fetchPredictions,
+  fetchZolaDashboard,
   fetchZolaStatus,
   triggerCyberspaceLearning,
   proposeSelfEvolution,
@@ -67,9 +67,17 @@ export default function ZolaPredictions() {
   }, [])
 
   // Load predictions
+  const loadDashboard = () => {
+    fetchZolaDashboard().then(data => {
+      if (data && data.predictions) {
+        setPredictions(data.predictions)
+      }
+    }).catch(() => {})
+  }
+
   useEffect(() => {
-    fetchPredictions().then(setPredictions).catch(() => {})
-    const i = setInterval(() => fetchPredictions().then(setPredictions).catch(() => {}), 8000)
+    loadDashboard()
+    const i = setInterval(loadDashboard, 8000)
     return () => clearInterval(i)
   }, [])
 
@@ -324,17 +332,17 @@ export default function ZolaPredictions() {
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                     <div>
-                      <h3 style={{ fontSize: 18, fontWeight: 700 }}>{p.entity_name}</h3>
+                      <h3 style={{ fontSize: 18, fontWeight: 700 }}>{p.legal_name || p.entity_name}</h3>
                       <div className="mono" style={{ fontSize: 11, color: 'var(--cyan)', marginTop: 4, letterSpacing: '0.8px' }}>
-                        TRANSITION: {p.transition_type?.replace(/_/g, ' ').toUpperCase()}
+                        TRANSITION: {p.prediction_details?.transition_type?.replace(/_/g, ' ').toUpperCase() || 'EXPANSION ACTION'}
                       </div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div className="mono" style={{ fontSize: 24, fontWeight: 800, color: 'var(--cyan)' }}>
-                        {Math.round((p.success_probability ?? 0) * 100)}%
+                        {`${Math.round((p.expansion_score ?? p.prediction_details?.success_probability ?? 0) * 100)}%`}
                       </div>
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Resolution Probability
+                        Expansion Score
                       </div>
                     </div>
                   </div>
@@ -344,7 +352,7 @@ export default function ZolaPredictions() {
                     <div 
                       style={{ 
                         height: '100%', 
-                        width: `${(p.success_probability ?? 0) * 100}%`, 
+                        width: `${(p.expansion_score ?? p.prediction_details?.success_probability ?? 0) * 100}%`, 
                         background: 'linear-gradient(90deg, var(--blue), var(--cyan))',
                         boxShadow: '0 0 8px var(--cyan)'
                       }} 
@@ -352,19 +360,26 @@ export default function ZolaPredictions() {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, marginBottom: 20 }}>
+                    {p.narrative && (
+                      <div style={{ marginBottom: 6 }}>
+                        <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>GENERATED NARRATIVE:</span>
+                        <p style={{ color: 'var(--text-secondary)', margin: '4px 0 0 0', fontStyle: 'italic', lineHeight: '1.4' }}>{p.narrative}</p>
+                      </div>
+                    )}
                     <div>
                       <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>CAUSAL MECHANISM:</span>
-                      <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>{p.causal_mechanism}</span>
+                      <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>{p.prediction_details?.causal_mechanism || p.causal_mechanism}</span>
                     </div>
                     <div>
                       <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>OPTIMAL INTERVENTION:</span>
-                      <span style={{ color: 'var(--cyan)', fontWeight: 600, marginLeft: 8 }}>{p.optimal_intervention}</span>
+                      <span style={{ color: 'var(--cyan)', fontWeight: 600, marginLeft: 8 }}>{p.prediction_details?.optimal_intervention || p.optimal_intervention}</span>
                     </div>
                     <div>
                       <span style={{ color: 'var(--text-muted)', fontWeight: 'bold' }}>RECOMMENDED TIMING:</span>
-                      <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>{p.recommended_timing}</span>
+                      <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>{p.prediction_details?.recommended_timing || p.recommended_timing}</span>
                     </div>
                   </div>
+
 
                   {/* Consequence chain flowchart */}
                   {p.consequence_chain?.length > 0 && (
@@ -448,74 +463,87 @@ export default function ZolaPredictions() {
             </span>
           </div>
 
-          {/* KRONOS Scaling Stepper */}
-          {kronosStatus && (
-            <div style={{ marginBottom: 24 }}>
-              <div className="mono" style={{
-                fontSize: 11,
-                fontWeight: 800,
-                letterSpacing: '1.5px',
-                color: 'var(--cyan)',
-                textTransform: 'uppercase',
-                marginBottom: 12,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8
-              }}>
-                <span style={{ opacity: 0.5 }}>◈</span>
-                KRONOS Scaling Pipeline Status
-              </div>
-              <div style={{ display: 'flex', alignItems: 'stretch', gap: 12, flexWrap: 'wrap' }}>
-                {kronosStatus.phases?.map((p, idx) => {
-                  const isActive = p.phase === kronosStatus.current_phase;
-                  return (
-                    <div key={p.phase} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: '1 1 200px' }}>
-                      <div 
-                        className="glass-panel" 
-                        style={{
-                          padding: '12px 16px',
-                          borderRadius: 8,
-                          background: isActive ? 'rgba(0, 255, 255, 0.05)' : 'rgba(255, 255, 255, 0.02)',
-                          border: isActive ? '1px solid var(--cyan)' : '1px solid rgba(255, 255, 255, 0.08)',
-                          flex: 1,
-                          position: 'relative',
-                          overflow: 'hidden'
-                        }}
-                      >
-                        {isActive && (
-                          <div style={{
-                            position: 'absolute',
-                            top: 0, right: 0,
-                            background: 'var(--cyan)',
-                            color: '#02040b',
-                            fontSize: '8px',
-                            fontWeight: 800,
-                            padding: '2px 6px',
-                            borderBottomLeftRadius: 6,
-                            letterSpacing: '0.5px'
-                          }} className="mono">
-                            ACTIVE
-                          </div>
-                        )}
-                        <div className="mono" style={{ fontSize: 9, color: isActive ? 'var(--cyan)' : 'var(--text-muted)', fontWeight: 800 }}>
-                          PHASE 0{p.phase}
-                        </div>
-                        <div className="mono" style={{ fontSize: 13, fontWeight: 'bold', color: isActive ? '#fff' : 'var(--text-secondary)', marginTop: 4 }}>
-                          {p.from} → {p.to}
-                        </div>
-                        <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>
-                          {p.method}
-                        </div>
-                      </div>
-                      {idx < kronosStatus.phases.length - 1 && (
-                        <span style={{ color: 'rgba(255,255,255,0.1)', fontSize: 14 }} className="mono">→</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+          {/* ── LIVE Model Intelligence Panel ── */}
+          <div style={{ marginBottom: 24 }}>
+            <div className="mono" style={{
+              fontSize: 11, fontWeight: 800, letterSpacing: '1.5px',
+              color: 'var(--cyan)', textTransform: 'uppercase', marginBottom: 12,
+              display: 'flex', alignItems: 'center', gap: 8
+            }}>
+              <span style={{ opacity: 0.5 }}>◈</span>
+              Live KRONOS Model Intelligence
             </div>
-          )}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+              {[
+                {
+                  label: 'KRONOS PILLARS',
+                  value: architectureReport?.kronos?.pillars ?? '—',
+                  sub: architectureReport?.kronos?.pillar_names?.slice(0,3).join(', ') + (architectureReport?.kronos?.pillars > 3 ? '…' : '') || 'Loading…',
+                  color: 'var(--cyan)'
+                },
+                {
+                  label: 'LIVE PARAMS',
+                  value: (architectureReport?.kronos?.params ?? 0).toLocaleString(),
+                  sub: `${((architectureReport?.kronos?.params ?? 0) / 1e6).toFixed(2)}M active parameters`,
+                  color: 'var(--cyan)'
+                },
+                {
+                  label: 'APEX MORPHISMS',
+                  value: architectureReport?.apex?.n_total_morphisms ?? '—',
+                  sub: `Causal depth: ${architectureReport?.apex?.max_causal_depth ?? '—'}`,
+                  color: 'var(--blue)'
+                },
+                {
+                  label: 'DRSN NODES',
+                  value: architectureReport?.drsn?.n_nodes ?? '—',
+                  sub: `Mean V: ${architectureReport?.drsn?.mean_V?.toFixed(1) ?? '—'}mV`,
+                  color: 'var(--blue)'
+                },
+                {
+                  label: 'GÖDEL FITNESS',
+                  value: scalingStatus?.fitness_history?.length > 0
+                    ? scalingStatus.fitness_history[scalingStatus.fitness_history.length - 1].toFixed(4)
+                    : '—',
+                  sub: `Generations: ${scalingStatus?.generations_completed ?? 0}`,
+                  color: '#00ff88'
+                },
+                {
+                  label: 'BACKPROP STEPS',
+                  value: (status?.stats?.backprop_steps ?? 0).toLocaleString(),
+                  sub: `Loss: ${status?.stats?.latest_loss?.toFixed(4) ?? '—'}`,
+                  color: 'var(--amber)'
+                },
+              ].map(({ label, value, sub, color }) => (
+                <div key={label} style={{
+                  background: 'rgba(0,0,0,0.3)',
+                  border: '1px solid rgba(0,255,255,0.15)',
+                  borderRadius: 6, padding: 12,
+                }}>
+                  <div className="mono" style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 6 }}>
+                    {label}
+                  </div>
+                  <div className="mono" style={{ fontSize: 17, fontWeight: 700, color, marginBottom: 3 }}>
+                    {value}
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Pillar badges */}
+            {architectureReport?.kronos?.pillar_names?.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+                {architectureReport.kronos.pillar_names.map(name => (
+                  <span key={name} style={{
+                    fontSize: 9, padding: '2px 8px',
+                    border: '1px solid rgba(0,255,255,0.25)', borderRadius: 10,
+                    color: 'var(--cyan)', fontFamily: 'monospace'
+                  }}>{name}</span>
+                ))}
+              </div>
+            )}
+          </div>
+
 
           {/* ── Architecture Report Panel ── */}
           <div style={{ marginBottom: 24 }}>
@@ -549,7 +577,7 @@ export default function ZolaPredictions() {
                         sub: 'mean V: ' + (architectureReport.drsn?.mean_V?.toFixed(2) ?? '—') + 'mV',
                       },
                       {
-                        label: 'KRONOS 9-PILLAR',
+                        label: architectureReport.kronos?.model === 'NOETHER_KRONOS' ? 'NOETHER-KRONOS 13-PILLAR' : 'KRONOS 9-PILLAR',
                         value: (architectureReport.kronos?.params?.toLocaleString() ?? '—') + ' params',
                         sub: 'pillars: ' + (architectureReport.kronos?.pillars ?? '—'),
                       },
@@ -819,7 +847,7 @@ export default function ZolaPredictions() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
                     <span style={{ color: 'var(--text-muted)' }}>Virtual Parameters:</span>
                     <span className="mono" style={{ color: 'var(--blue)', fontWeight: 'bold' }}>
-                      {status?.stats?.virtual_parameters?.toLocaleString() ?? "13,000,000,000"} (1Q Target)
+                      {status?.stats?.virtual_parameters?.toLocaleString() ?? "N/A (Mock Mode)"} (Theoretical 1Q Target)
                     </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
@@ -850,13 +878,15 @@ export default function ZolaPredictions() {
                       stroke="var(--blue)" 
                       strokeWidth="5" 
                       strokeDasharray={2 * Math.PI * 28}
-                      strokeDashoffset={calculateCircleDash(status?.stats?.virtual_parameters ?? 13e9, 1e15)}
+                      strokeDashoffset={calculateCircleDash(status?.stats?.virtual_parameters ?? 0, 1e15)}
                       style={{ transition: 'stroke-dashoffset 0.8s ease' }}
                     />
                   </svg>
                   <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    <span className="mono" style={{ fontSize: 12, fontWeight: 'bold', color: 'var(--blue)' }}>
-                      {status?.stats?.virtual_parameters >= 1e15 ? '100%' : '1.3%'}
+                    <span className="mono" style={{ fontSize: 10, fontWeight: 'bold', color: 'var(--blue)' }}>
+                      {status?.stats?.virtual_parameters 
+                        ? `${(status.stats.virtual_parameters / 1e15 * 100).toFixed(4)}%` 
+                        : '0.00%'}
                     </span>
                     <span style={{ fontSize: 7, color: 'var(--text-muted)' }}>1Q SCALE</span>
                   </div>

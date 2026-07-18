@@ -27,6 +27,47 @@ class EntityRegistry:
 
     async def _bootstrap_async(self):
         """Load entities from DB if they exist, otherwise seed 50 fake ones."""
+        from config import USE_REAL_DATA
+        if USE_REAL_DATA:
+            from models.commerce import CompanyModel
+            from sqlalchemy.orm import selectinload
+            async with async_session_maker() as session:
+                try:
+                    stmt = select(CompanyModel).options(
+                        selectinload(CompanyModel.financial_metrics),
+                        selectinload(CompanyModel.job_postings)
+                    )
+                    result = await session.execute(stmt)
+                    companies = result.scalars().all()
+                    if companies:
+                        for c in companies:
+                            latest_metrics = c.financial_metrics[-1] if c.financial_metrics else None
+                            rev = latest_metrics.revenue if latest_metrics else 0.0
+                            sec = (c.sector or '').lower()
+                            if 'financial' in sec or 'bank' in sec or 'insurance' in sec:
+                                domain = 'financial'
+                            elif 'health' in sec or 'pharma' in sec or 'bio' in sec or 'medical' in sec or 'life sciences' in sec or 'clinical' in sec:
+                                domain = 'healthcare'
+                            elif any(x in sec for x in ['tech', 'software', 'hardware', 'iot', 'energy', 'industrial', 'utility', 'utilities', 'semiconductor', 'telecom', 'material', 'materials', 'communication']):
+                                domain = 'iot'
+                            else:
+                                domain = 'social'
+                                
+                            self.entities[c.id] = {
+                                "id": c.id,
+                                "name": c.legal_name,
+                                "domain": domain,
+                                "status": "stable",
+                                "entropy": 0.5,
+                                "event_count": len(c.job_postings),
+                                "alert_count": 0,
+                                "ticker": c.ticker,
+                                "revenue": rev
+                            }
+                        return
+                except Exception as e:
+                    print(f"[ENTITY REGISTRY] Failed to load real companies: {e}")
+
         async with async_session_maker() as session:
             # Check whether the table already has rows
             result = await session.execute(select(EntityModel).limit(1))

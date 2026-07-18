@@ -38,5 +38,5 @@ export default function AnimatedCounter({ value, duration = 1200 }) {
     requestAnimationFrame(animate)
   }, [value, duration])
 
-  return <span>{displayValue}</span>
+  return <span>{typeof displayValue === 'number' ? displayValue.toLocaleString() : displayValue}</span>
 }

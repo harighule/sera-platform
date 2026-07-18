@@ -1,33 +1,43 @@
 import { useEffect, useState } from 'react'
-import { fetchEntropy, fetchAlerts } from '../api/client'
+import { fetchAxiomMonitor } from '../api/client'
 import GlassCard from '../components/GlassCard'
 import AnimatedCounter from '../components/AnimatedCounter'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import NewsPanel from '../components/NewsPanel'
 
 export default function AxiomMonitor() {
+  const [monitorData, setMonitorData] = useState({ total_entities: 0, active_alerts: 0 })
   const [entropy, setEntropy] = useState([])
   const [alerts, setAlerts] = useState([])
   const [selectedEntity, setSelectedEntity] = useState(null)
 
-  useEffect(() => {
-    fetchEntropy().then(data => {
-      setEntropy(data)
-      setSelectedEntity(prev => prev || (data.length > 0 ? data[0] : null))
-    })
-    fetchAlerts().then(setAlerts)
-
-    const i = setInterval(() => {
-      fetchEntropy().then(data => {
-        setEntropy(data)
+  const updateMonitor = () => {
+    fetchAxiomMonitor().then(data => {
+      if (data) {
+        setMonitorData(data)
+        setEntropy(data.entropy_summary || [])
+        
+        const formattedAlerts = (data.high_risk_entities || []).map(item => ({
+          entity_id: item.entity_id,
+          entity_name: item.entity_name || 'Unknown Entity',
+          severity: (item.entropy || 0) > 0.65 ? 'critical' : 'pre-transition',
+          entropy_value: item.entropy,
+          description: `Entropy spike detected for ${item.entity_name || 'Unknown'} (${item.risk_factor || 'entropy_spike'}) — Shannon entropy ${(item.entropy || 0).toFixed(4)}`
+        }))
+        setAlerts(formattedAlerts)
+        
         setSelectedEntity(prev => {
-          if (!prev) return data.length > 0 ? data[0] : null
-          const updated = data.find(item => item.entity_name === prev.entity_name)
+          if (!prev) return data.entropy_summary?.length > 0 ? data.entropy_summary[0] : null
+          const updated = data.entropy_summary.find(item => item.entity_name === prev.entity_name)
           return updated || prev
         })
-      })
-      fetchAlerts().then(setAlerts)
-    }, 4000)
+      }
+    })
+  }
+
+  useEffect(() => {
+    updateMonitor()
+    const i = setInterval(updateMonitor, 4000)
     return () => clearInterval(i)
   }, [])
 
@@ -76,9 +86,9 @@ export default function AxiomMonitor() {
         <GlassCard glowType="cyan">
           <div className="stat-label">Entities Monitored</div>
           <div className="stat-value mono">
-            <AnimatedCounter value={entropy.length} />
+            <AnimatedCounter value={monitorData.total_entities || entropy.length} />
           </div>
-          <div className="stat-sub">AXIOM-Φ state trackers active</div>
+          <div className="stat-sub">Total entity universe tracked</div>
         </GlassCard>
       </div>
 
@@ -126,7 +136,7 @@ export default function AxiomMonitor() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {/* Recharts Bar Comparison */}
           <GlassCard title="Entropy Variance - High-Risk Entities" glowType="cyan">
-            <div style={{ height: 200, marginTop: 10 }}>
+            <div style={{ height: 200, minHeight: 200, minWidth: 0, display: 'block', marginTop: 10 }}>
               {chartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>

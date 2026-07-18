@@ -158,3 +158,82 @@ class DepthInjector:
             }
         
         return model, new_layers
+
+
+# ─────────────────────────────────────────────────────────────────
+# REAL DEPTH INJECTION — residual identity blocks that actually mutate
+# a network's depth with verified zero regression, then train.
+# ─────────────────────────────────────────────────────────────────
+class ResidualFFNBlock(nn.Module):
+    """
+    x → x + FFN(x), with the FFN zero-initialised so the block is the EXACT
+    identity at insertion time (zero regression). It begins learning immediately
+    because it sits between layers that already carry gradient.
+    """
+    def __init__(self, d_model: int, d_ff: int):
+        super().__init__()
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model)
+        )
+        with torch.no_grad():                       # zero-init ⇒ identity via residual
+            for m in self.ffn.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.zeros_(m.weight); nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        return x + self.ffn(x)
+
+
+class DepthInjectedStack(nn.Module):
+    """A base module followed by N injected residual identity blocks — a network
+    whose depth was genuinely increased with zero function change at init."""
+    def __init__(self, base: nn.Module, d_model: int, d_ff: int, n_blocks: int):
+        super().__init__()
+        self.base = base
+        self.blocks = nn.ModuleList([ResidualFFNBlock(d_model, d_ff)
+                                     for _ in range(n_blocks)])
+
+    def forward(self, x):
+        h = self.base(x)
+        for blk in self.blocks:
+            h = blk(h)
+        return h
+
+
+def verify_depth_injection(d_model: int = 32, d_ff: int = 64, n_blocks: int = 3,
+                           seed: int = 0) -> dict:
+    """
+    Prove real depth injection: (1) inserting N residual identity blocks leaves
+    the function EXACTLY unchanged at init (zero regression), and (2) the deeper
+    network then trains (the new blocks specialise, loss drops).
+    """
+    torch.manual_seed(seed)
+    base = nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, d_model))
+    x = torch.randn(16, d_model)
+    with torch.no_grad():
+        y_base = base(x)
+    deep = DepthInjectedStack(base, d_model, d_ff, n_blocks)
+    with torch.no_grad():
+        y_deep = deep(x)
+    regression = (y_deep - y_base).abs().max().item()          # must be ~0
+
+    # train the deeper model toward a target — new blocks specialise
+    target = torch.randn(16, d_model)
+    opt = torch.optim.Adam(deep.parameters(), lr=1e-2)
+    l0 = float(((deep(x) - target) ** 2).mean())
+    for _ in range(60):
+        opt.zero_grad(); loss = ((deep(x) - target) ** 2).mean(); loss.backward(); opt.step()
+    l1 = float(((deep(x) - target) ** 2).mean())
+
+    base_depth = sum(1 for m in base.modules() if isinstance(m, nn.Linear))
+    deep_depth = sum(1 for m in deep.modules() if isinstance(m, nn.Linear))
+    return {
+        "blocks_injected": n_blocks,
+        "linear_layers_before": base_depth,
+        "linear_layers_after": deep_depth,
+        "zero_regression_at_init_max_diff": regression,
+        "function_preserved_at_init": regression < 1e-5,
+        "loss_before_train": round(l0, 5),
+        "loss_after_train": round(l1, 5),
+        "deeper_model_trains": l1 < l0,
+    }

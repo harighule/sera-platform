@@ -7,10 +7,26 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:8000',
-      '/ws': {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+        proxyTimeout: 30000,
+        timeout: 30000,
+        headers: {
+          Connection: 'close'
+        },
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            console.log('proxy error', err.message)
+          })
+        }
+      },
+      '/api/ws': {
         target: 'ws://localhost:8000',
-        ws: true
+        ws: true,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/ws/, '/ws')
       }
     }
   },
