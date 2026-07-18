@@ -108,6 +108,11 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
+        # Allow Render health check probe without auth.
+        HEALTH_PATHS = {"/api/health", "/health", "/healthz"}
+        if request.url.path in HEALTH_PATHS:
+            return await call_next(request)
+
         # WebSocket upgrade requests cannot carry custom headers reliably in all
         # clients, so authenticate via the `api_key` query parameter instead.
         # Returning a non-101 response here closes the connection cleanly at the
