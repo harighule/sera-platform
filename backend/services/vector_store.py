@@ -16,6 +16,9 @@ class APEXEmbeddingFunction(EmbeddingFunction):
     SentenceTransformer encoder for resource efficiency and offline speed.
     """
     def __call__(self, input: Documents) -> Embeddings:
+        from config import ENTITY_MODE
+        if ENTITY_MODE == "mock":
+            return [[0.0] * 384 for _ in range(len(input))]
         try:
             from entity_interface.apex_causal import get_encoder
             encoder = get_encoder()
