@@ -7,6 +7,11 @@ from models.db_models import AlertModel
 
 router = APIRouter(prefix="/api", tags=["health_admin"])
 
+@router.get("/health")
+async def health_check():
+    """Simple liveness probe for Render / load balancers."""
+    return {"status": "ok"}
+
 @router.get("/health/freshness")
 async def get_data_freshness():
     """
