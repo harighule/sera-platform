@@ -18,6 +18,10 @@ if DATABASE_URL.startswith("postgresql"):
         "pool_recycle": 1800,
         "pool_pre_ping": True
     })
+elif DATABASE_URL.startswith("sqlite"):
+    engine_kwargs.update({
+        "connect_args": {"timeout": 15.0}
+    })
 
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 async_session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
