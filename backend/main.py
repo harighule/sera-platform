@@ -109,8 +109,9 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Allow Render health check probe without auth.
-        HEALTH_PATHS = {"/api/health", "/health", "/healthz"}
-        if request.url.path in HEALTH_PATHS:
+        HEALTH_PATHS = {"/api/health", "/health", "/healthz", "/docs", "/redoc", "/openapi.json"}
+        if request.url.path in HEALTH_PATHS or request.url.path.startswith("/docs/") or request.url.path.startswith("/redoc/"):
+
             return await call_next(request)
 
         # WebSocket upgrade requests cannot carry custom headers reliably in all
