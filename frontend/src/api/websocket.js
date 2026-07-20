@@ -14,7 +14,16 @@ export function createStream(onMessage) {
         
         const WS_BASE = import.meta.env.VITE_WS_BASE ?? defaultWsBase
         const API_KEY = import.meta.env.VITE_API_KEY ?? 'sera-demo-2026'
-        const WS_URL = `${WS_BASE}/api/ws/stream?api_key=${encodeURIComponent(API_KEY)}`
+        
+        let WS_URL;
+        if (host.includes('localhost:5173') || host.includes('127.0.0.1:5173')) {
+            // Development: Use the Vite proxy prefix to forward to backend HMR-safely
+            WS_URL = `${WS_BASE}/api/ws/stream?api_key=${encodeURIComponent(API_KEY)}`
+        } else {
+            // Production: Connect directly to the backend's /ws/stream route
+            WS_URL = `${WS_BASE}/ws/stream?api_key=${encodeURIComponent(API_KEY)}`
+        }
+        
         const ws = new WebSocket(WS_URL)
         ws.onmessage = (e) => {
             try {
