@@ -4,7 +4,15 @@ export function createStream(onMessage) {
         // backend at port 8000. Plain /ws collides with Vite's own HMR socket.
         const host = window.location.host
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        const WS_BASE = import.meta.env.VITE_WS_BASE ?? `${protocol}//${host}`
+        
+        // Derive WS_BASE from VITE_API_BASE if available, otherwise fallback to current host
+        let defaultWsBase = `${protocol}//${host}`
+        const apiBase = import.meta.env.VITE_API_BASE
+        if (apiBase) {
+            defaultWsBase = apiBase.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
+        }
+        
+        const WS_BASE = import.meta.env.VITE_WS_BASE ?? defaultWsBase
         const API_KEY = import.meta.env.VITE_API_KEY ?? 'sera-demo-2026'
         const WS_URL = `${WS_BASE}/api/ws/stream?api_key=${encodeURIComponent(API_KEY)}`
         const ws = new WebSocket(WS_URL)
