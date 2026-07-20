@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 # Configure engine kwargs dynamically for production PostgreSQL vs SQLite
 engine_kwargs = {"echo": False, "future": True}
-if DATABASE_URL.startswith("postgresql"):
+if DATABASE_URL.startswith("postgresql") or DATABASE_URL.startswith("cockroachdb"):
     engine_kwargs.update({
         "pool_size": 20,
         "max_overflow": 10,
@@ -20,10 +20,25 @@ if DATABASE_URL.startswith("postgresql"):
     })
 elif DATABASE_URL.startswith("sqlite"):
     engine_kwargs.update({
-        "connect_args": {"timeout": 15.0}
+        "connect_args": {"timeout": 30.0}
     })
 
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
+
+# For SQLite, enable WAL (Write-Ahead Logging) mode to prevent database locks during concurrent operations
+if DATABASE_URL.startswith("sqlite"):
+    from sqlalchemy import event
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        except Exception as e:
+            logger.warning(f"Failed to set SQLite PRAGMA journal_mode/synchronous: {e}")
+        finally:
+            cursor.close()
+
 async_session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
 

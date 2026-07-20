@@ -75,37 +75,54 @@ async def run_executive_movements_ingestion() -> int:
     today = datetime.utcnow()
     
     async with async_session_maker() as session:
-        for item in dataset_items:
-            # Parse fields with fallbacks
-            raw_company = item.get("company_ticker") or item.get("ticker") or item.get("current_company_name") or item.get("company_name")
-            name = item.get("full_name") or item.get("name")
-            new_title = item.get("current_company_title") or item.get("position") or item.get("title")
-            
-            if not raw_company or not name or not new_title:
-                continue
+        with session.no_autoflush:
+            for item in dataset_items:
+                # Parse fields with fallbacks
+                raw_company = item.get("company_ticker") or item.get("ticker") or item.get("current_company_name") or item.get("company_name")
+                name = item.get("full_name") or item.get("name")
+                new_title = item.get("current_company_title") or item.get("position") or item.get("title")
                 
-            # Resolve company ticker
-            ticker = name_to_ticker.get(str(raw_company).lower().strip()) or name_to_ticker.get(str(raw_company).upper().strip())
-            if not ticker:
-                # If cannot resolve to an existing company in DB, skip or default to raw name
-                continue
-
-            # Query the latest record of this executive at this company
-            stmt = select(ExecutiveMovement).where(
-                ExecutiveMovement.ticker == ticker,
-                ExecutiveMovement.exec_name == name
-            ).order_by(ExecutiveMovement.change_date.desc()).limit(1)
-            
-            res = await session.execute(stmt)
-            latest_movement = res.scalars().first()
-            
-            if latest_movement:
-                if latest_movement.new_title != new_title:
-                    # A change in title has occurred!
+                if not raw_company or not name or not new_title:
+                    continue
+                    
+                # Resolve company ticker
+                ticker = name_to_ticker.get(str(raw_company).lower().strip()) or name_to_ticker.get(str(raw_company).upper().strip())
+                if not ticker:
+                    # If cannot resolve to an existing company in DB, skip or default to raw name
+                    continue
+    
+                # Query the latest record of this executive at this company
+                stmt = select(ExecutiveMovement).where(
+                    ExecutiveMovement.ticker == ticker,
+                    ExecutiveMovement.exec_name == name
+                ).order_by(ExecutiveMovement.change_date.desc()).limit(1)
+                
+                res = await session.execute(stmt)
+                latest_movement = res.scalars().first()
+                
+                if latest_movement:
+                    if latest_movement.new_title != new_title:
+                        # A change in title has occurred!
+                        change = ExecutiveMovement(
+                            ticker=ticker,
+                            exec_name=name,
+                            old_title=latest_movement.new_title,
+                            new_title=new_title,
+                            change_date=today
+                        )
+                        session.add(change)
+                        movements_detected += 1
+                        try:
+                            from services.vector_store import VectorStoreService
+                            VectorStoreService.index_executive_movement(ticker, name, latest_movement.new_title, new_title, "promotion", today)
+                        except Exception as e:
+                            logger.error(f"Failed to index executive movement: {e}")
+                else:
+                    # Baseline entry (first time seeing this executive)
                     change = ExecutiveMovement(
                         ticker=ticker,
                         exec_name=name,
-                        old_title=latest_movement.new_title,
+                        old_title=None,
                         new_title=new_title,
                         change_date=today
                     )
@@ -113,27 +130,11 @@ async def run_executive_movements_ingestion() -> int:
                     movements_detected += 1
                     try:
                         from services.vector_store import VectorStoreService
-                        VectorStoreService.index_executive_movement(ticker, name, latest_movement.new_title, new_title, "promotion", today)
+                        VectorStoreService.index_executive_movement(ticker, name, None, new_title, "hire", today)
                     except Exception as e:
                         logger.error(f"Failed to index executive movement: {e}")
-            else:
-                # Baseline entry (first time seeing this executive)
-                change = ExecutiveMovement(
-                    ticker=ticker,
-                    exec_name=name,
-                    old_title=None,
-                    new_title=new_title,
-                    change_date=today
-                )
-                session.add(change)
-                movements_detected += 1
-                try:
-                    from services.vector_store import VectorStoreService
-                    VectorStoreService.index_executive_movement(ticker, name, None, new_title, "hire", today)
-                except Exception as e:
-                    logger.error(f"Failed to index executive movement: {e}")
-                
-        await session.commit()
+                    
+            await session.commit()
         
     logger.info(f"Executive Movements tracking completed. Processed and saved {movements_detected} changes.")
     return movements_detected
@@ -157,37 +158,38 @@ async def seed_mock_executive_movements() -> int:
     from datetime import timedelta
     
     async with async_session_maker() as session:
-        for move in mock_movements:
-            # Check if this movement record already exists to prevent duplicate seeding
-            stmt = select(ExecutiveMovement).where(
-                ExecutiveMovement.ticker == move["ticker"],
-                ExecutiveMovement.exec_name == move["exec_name"],
-                ExecutiveMovement.new_title == move["new_title"]
-            )
-            res = await session.execute(stmt)
-            if res.scalars().first():
-                continue
-                
-            change_date = datetime.utcnow() - timedelta(days=move["days_ago"])
-            db_record = ExecutiveMovement(
-                ticker=move["ticker"],
-                exec_name=move["exec_name"],
-                old_title=move["old_title"],
-                new_title=move["new_title"],
-                change_date=change_date,
-                created_at=change_date
-            )
-            session.add(db_record)
-            records_written += 1
-            try:
-                from services.vector_store import VectorStoreService
-                VectorStoreService.index_executive_movement(
-                    move["ticker"], move["exec_name"], move["old_title"], move["new_title"], "promotion" if move["old_title"] else "hire", change_date
+        with session.no_autoflush:
+            for move in mock_movements:
+                # Check if this movement record already exists to prevent duplicate seeding
+                stmt = select(ExecutiveMovement).where(
+                    ExecutiveMovement.ticker == move["ticker"],
+                    ExecutiveMovement.exec_name == move["exec_name"],
+                    ExecutiveMovement.new_title == move["new_title"]
                 )
-            except Exception as e:
-                logger.error(f"Failed to index mock executive movement: {e}")
-            
-        await session.commit()
+                res = await session.execute(stmt)
+                if res.scalars().first():
+                    continue
+                    
+                change_date = datetime.utcnow() - timedelta(days=move["days_ago"])
+                db_record = ExecutiveMovement(
+                    ticker=move["ticker"],
+                    exec_name=move["exec_name"],
+                    old_title=move["old_title"],
+                    new_title=move["new_title"],
+                    change_date=change_date,
+                    created_at=change_date
+                )
+                session.add(db_record)
+                records_written += 1
+                try:
+                    from services.vector_store import VectorStoreService
+                    VectorStoreService.index_executive_movement(
+                        move["ticker"], move["exec_name"], move["old_title"], move["new_title"], "promotion" if move["old_title"] else "hire", change_date
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to index mock executive movement: {e}")
+                
+            await session.commit()
         
     logger.info(f"Seeded {records_written} mock executive movements into the database.")
     return records_written
