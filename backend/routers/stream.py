@@ -115,58 +115,123 @@ async def save_alert_to_db(entity_id: str, entropy_score: float, z_score: float,
     except Exception as exc:
         logger.error(f"[stream] Alert DB write failed (non-fatal): {exc}", exc_info=True)
 
+# ===========================================================================
+# MAIN WEBSOCKET ENDPOINT - FIXED VERSION
+# ===========================================================================
 @router.websocket("/ws/stream")
 async def websocket_stream(websocket: WebSocket):
-    # Defence-in-depth: authenticate via the `api_key` query parameter
-    # BEFORE accepting the socket. The middleware in main.py already rejects
-    # unauthenticated upgrade requests at the HTTP handshake level, but this
-    # guard also protects the endpoint if called directly (e.g. in tests).
-    #
-    # WebSocket close code 1008 = Policy Violation (RFC 6455 §7.4.1).
+    """
+    WebSocket endpoint for real-time event streaming.
+    
+    FIX: Accept connection FIRST, then check authentication.
+    This follows the WebSocket protocol correctly.
+    """
+    # ✅ STEP 1: Accept the WebSocket connection first
+    await websocket.accept()
+    
+    # ✅ STEP 2: Now check authentication via query parameters
     api_key = websocket.query_params.get("api_key")
     if not api_key or api_key not in _WS_API_KEYS:
-        logger.warning(f"[SECURITY] WebSocket upgrade rejected. Invalid api_key. Client IP={websocket.client.host if websocket.client else 'unknown'}")
+        logger.warning(
+            f"[SECURITY] WebSocket upgrade rejected. Invalid api_key: {api_key}. "
+            f"Client IP={websocket.client.host if websocket.client else 'unknown'}"
+        )
         await websocket.close(code=1008, reason="Unauthorized: invalid or missing api_key")
         return
 
+    # ✅ STEP 3: Log successful connection
+    logger.info(f"✅ WebSocket connected - Client: {websocket.client.host if websocket.client else 'unknown'}")
     from config import USE_REAL_DATA
+    logger.info(f"📊 USE_REAL_DATA={USE_REAL_DATA} | ENTITY_MODE={os.getenv('ENTITY_MODE', 'mock')}")
 
+    # ✅ STEP 4: Handle based on mode
     if USE_REAL_DATA:
-        # Keep client connection open, listen for disconnect, and broadcast real updates
-        await manager.connect(websocket)
+        # =============================================================
+        # REAL DATA MODE - Wait for real events from external sources
+        # =============================================================
         try:
+            # Add to connection manager for broadcasting real events
+            await manager.connect(websocket)
             while True:
-                # Keep connection alive by waiting for client messages (or ping-pong)
+                # Keep connection alive by waiting for client messages
+                # Real events are pushed via broadcast_real_event()
                 await websocket.receive_text()
         except WebSocketDisconnect:
+            logger.info("❌ WebSocket disconnected (real mode)")
             manager.disconnect(websocket)
     else:
-        # Fall back to fake loop
-        await websocket.accept()
+        # =============================================================
+        # MOCK DATA MODE - Generate synthetic events every 0.5-2 seconds
+        # =============================================================
         try:
+            logger.info("🎲 Starting mock event generator...")
+            event_count = 0
+            
             while True:
+                # Get a random entity
                 entity = entity_registry.get_random_entity()
-                event = FakeDataGenerator.generate_random_event(entity["id"], entity["name"])
-                metrics = entropy_engine.ingest(entity["id"], event["event_type"],
-                                                event["protocol"])
-                entity_registry.update_entropy(entity["id"], metrics["entropy"], metrics["alert_triggered"], metrics.get("z_score", 0.0))
-                asyncio.create_task(save_event_to_db(event, entropy_delta=metrics["entropy"]))
+                
+                # Generate random event
+                event = FakeDataGenerator.generate_random_event(
+                    entity["id"], 
+                    entity["name"]
+                )
+                
+                # Process through entropy engine
+                metrics = entropy_engine.ingest(
+                    entity["id"], 
+                    event["event_type"],
+                    event["protocol"]
+                )
+                
+                # Update entity registry
+                entity_registry.update_entropy(
+                    entity["id"], 
+                    metrics["entropy"], 
+                    metrics["alert_triggered"], 
+                    metrics.get("z_score", 0.0)
+                )
+                
+                # Save event to database (async, non-blocking)
+                asyncio.create_task(
+                    save_event_to_db(event, entropy_delta=metrics["entropy"])
+                )
+                
+                # Save alert if triggered (async, non-blocking)
                 if metrics["alert_triggered"]:
-                    asyncio.create_task(save_alert_to_db(
-                        entity_id=event["entity_id"],
-                        entropy_score=metrics["entropy"],
-                        z_score=metrics.get("z_score", 0.0),
-                        domain=event.get("domain", "unknown"),
-                    ))
+                    asyncio.create_task(
+                        save_alert_to_db(
+                            entity_id=event["entity_id"],
+                            entropy_score=metrics["entropy"],
+                            z_score=metrics.get("z_score", 0.0),
+                            domain=event.get("domain", "unknown"),
+                        )
+                    )
+                    logger.info(f"🚨 Alert triggered for entity {event['entity_id']}")
+                
+                # Build and send message
                 message = {
                     "type": "event",
                     "timestamp": datetime.utcnow().isoformat(),
                     "event": event,
                     "metrics": metrics
                 }
+                
                 await websocket.send_text(json.dumps(message))
+                event_count += 1
+                
+                # Log every 10 events
+                if event_count % 10 == 0:
+                    logger.info(f"📊 Sent {event_count} mock events so far")
+                
+                # Wait 0.5-2 seconds before next event
                 await asyncio.sleep(random.uniform(0.5, 2.0))
+                
         except WebSocketDisconnect:
-            pass
-
-            
+            logger.info(f"❌ WebSocket disconnected after {event_count} events (mock mode)")
+        except Exception as e:
+            logger.error(f"❌ Error in mock event generator: {e}", exc_info=True)
+            try:
+                await websocket.close(code=1011, reason="Internal server error")
+            except:
+                pass
