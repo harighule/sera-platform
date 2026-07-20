@@ -39,7 +39,7 @@ if DATABASE_URL.startswith("sqlite"):
         finally:
             cursor.close()
 
-async_session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+async_session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False, autoflush=False)
 Base = declarative_base()
 
 async def verify_db_connection() -> None:
